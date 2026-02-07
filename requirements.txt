@@ -1,0 +1,28 @@
+# ===== Core =====
+
+ultralytics>=8.3.0
+torch
+torchvision
+
+# ===== Video / Streaming =====
+
+opencv-python
+av
+ffmpeg-python
+
+# ===== Numerical =====
+
+numpy
+scipy
+
+# ===== Utilities =====
+
+tqdm
+pillow
+pyyaml
+psutil
+
+# ===== Optional but useful =====
+
+matplotlib
+pandas
