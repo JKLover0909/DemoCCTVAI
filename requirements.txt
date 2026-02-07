@@ -26,3 +26,5 @@ psutil
 
 matplotlib
 pandas
+requests
+pynvml
