@@ -7,6 +7,9 @@ os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 RTSP_URL = (
     "rtsp://root:Mkvc%402025@192.168.40.40:554/"
     "media/stream.sdp?profile=Profile101"
+    #Profile100: 2560x1920@15fps
+    #Profile101: 1280x960@20fps
+    #Profile102: 2560x1920@20fps
 )
 
 cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)

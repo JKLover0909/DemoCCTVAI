@@ -11,6 +11,7 @@ Usage:
 
 import os
 os.environ["QT_LOGGING_RULES"] = "*.debug=false"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
 
 import argparse
 import signal
@@ -19,6 +20,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from queue import Empty, Full, Queue
 from typing import Dict, List, Optional, Tuple
 
@@ -37,6 +39,9 @@ except ImportError:
 
 from ultralytics import YOLO
 
+# Project root directory (parent of src/)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 # ============================================================================
 # CONFIGURATION
@@ -46,8 +51,8 @@ class Config:
     """Pipeline configuration"""
     # Stream settings
     num_streams: int = 16
-    stream_type: str = "video"  # "mjpeg" or "video"
-    stream_url: str = "/home/jkl/Code/DemoCCTVAI/assets/videos/data1.mp4"
+    stream_type: str = "rtsp"  # "rtsp", "mjpeg" or "video"
+    stream_url: str = "rtsp://root:Mkvc%402025@192.168.40.40:554/media/stream.sdp?profile=Profile101"
     stream_username: str = "root"
     stream_password: str = "Mkvc@2025"
     
@@ -60,10 +65,15 @@ class Config:
     batch_timeout_ms: float = 50.0
     
     # Inference settings
-    model_path: str = "/home/jkl/Code/DemoCCTVAI/models/best.pt"
+    model_path: str = ""  # Will be set dynamically
     input_size: int = 640
     use_fp16: bool = True
     device: str = "cuda:0"
+    
+    def __post_init__(self):
+        # Set default model path relative to project root
+        if not self.model_path:
+            self.model_path = str(PROJECT_ROOT / "models" / "best.pt")
     
     # Benchmark settings
     duration_seconds: int = 60
@@ -308,6 +318,80 @@ class MJPEGStreamWorker(threading.Thread):
 
 
 # ============================================================================
+# RTSP STREAM WORKER (H264/H265)
+# ============================================================================
+class RTSPStreamWorker(threading.Thread):
+    """Thread-based RTSP stream capture using OpenCV + FFmpeg (supports H264/H265)"""
+    
+    def __init__(self, stream_id: int, rtsp_url: str, output_queue: Queue,
+                 preprocessor: FramePreprocessor, metrics: MetricsTracker,
+                 reconnect_delay: float = 2.0):
+        super().__init__(daemon=True)
+        self.stream_id = stream_id
+        self.rtsp_url = rtsp_url
+        self.output_queue = output_queue
+        self.preprocessor = preprocessor
+        self.metrics = metrics
+        self.reconnect_delay = reconnect_delay
+        self.running = False
+        self.cap: Optional[cv2.VideoCapture] = None
+    
+    def _open_stream(self) -> bool:
+        """Open RTSP stream with FFmpeg backend"""
+        try:
+            self.cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+            if self.cap.isOpened():
+                # Set buffer size to minimum for lower latency
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                return True
+            return False
+        except Exception:
+            return False
+    
+    def run(self):
+        self.running = True
+        
+        while self.running:
+            # Try to open stream
+            if self.cap is None or not self.cap.isOpened():
+                if not self._open_stream():
+                    time.sleep(self.reconnect_delay)
+                    continue
+            
+            # Read frame
+            ret, frame = self.cap.read()
+            
+            if not ret:
+                # Connection lost, try to reconnect
+                if self.cap:
+                    self.cap.release()
+                    self.cap = None
+                time.sleep(self.reconnect_delay)
+                continue
+            
+            # Preprocess frame
+            processed = self.preprocessor.process(frame)
+            capture_time = time.time()
+            
+            # Non-blocking push - drop if full
+            try:
+                self.output_queue.put_nowait({
+                    "stream_id": self.stream_id,
+                    "frame": processed,
+                    "timestamp": capture_time
+                })
+                self.metrics.record_capture(self.stream_id, dropped=False)
+            except Full:
+                self.metrics.record_capture(self.stream_id, dropped=True)
+    
+    def stop(self):
+        self.running = False
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+
+
+# ============================================================================
 # BATCH AGGREGATOR
 # ============================================================================
 class BatchAggregator:
@@ -466,7 +550,15 @@ class BenchmarkPipeline:
             self.queues.append(q)
             
             # Choose worker type based on stream_type
-            if config.stream_type == "video":
+            if config.stream_type == "rtsp":
+                worker = RTSPStreamWorker(
+                    stream_id=i,
+                    rtsp_url=config.stream_url,
+                    output_queue=q,
+                    preprocessor=self.preprocessor,
+                    metrics=self.metrics
+                )
+            elif config.stream_type == "video":
                 worker = VideoFileWorker(
                     stream_id=i,
                     video_path=config.stream_url,
@@ -619,12 +711,12 @@ def parse_args():
                         help="Number of camera streams (default: 16)")
     parser.add_argument("--duration", type=int, default=60,
                         help="Benchmark duration in seconds (default: 60)")
-    parser.add_argument("--type", type=str, choices=["video", "mjpeg"], default="video",
-                        help="Stream type: video file or mjpeg (default: video)")
+    parser.add_argument("--type", type=str, choices=["rtsp", "video", "mjpeg"], default="rtsp",
+                        help="Stream type: rtsp, video file or mjpeg (default: rtsp)")
     parser.add_argument("--url", type=str, 
-                        default="/home/jkl/Code/DemoCCTVAI/assets/videos/data1.mp4",
-                        help="Video file path or MJPEG stream URL")
-    parser.add_argument("--model", type=str, default="/home/jkl/Code/DemoCCTVAI/models/best.pt",
+                        default="rtsp://root:Mkvc%402025@192.168.40.40:554/media/stream.sdp?profile=Profile101",
+                        help="RTSP URL, video file path, or MJPEG stream URL")
+    parser.add_argument("--model", type=str, default="models/best.pt",
                         help="YOLO model path")
     parser.add_argument("--batch-min", type=int, default=4,
                         help="Minimum batch size (default: 4)")
