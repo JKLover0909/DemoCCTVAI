@@ -386,8 +386,13 @@ class RTSPStreamWorker(threading.Thread):
     
     def stop(self):
         self.running = False
+        # Give thread time to exit gracefully
+        time.sleep(0.1)
         if self.cap:
-            self.cap.release()
+            try:
+                self.cap.release()
+            except Exception:
+                pass
             self.cap = None
 
 
@@ -669,13 +674,23 @@ class BenchmarkPipeline:
         print("\n\n🛑 Shutting down...")
         self.running = False
         
-        # Stop workers
+        # Stop workers first
         for worker in self.workers:
             worker.stop()
         
-        # Wait for workers
-        for worker in self.workers:
-            worker.join(timeout=2)
+        # Wait for workers with longer timeout to prevent segfault
+        for i, worker in enumerate(self.workers):
+            worker.join(timeout=5)
+            if worker.is_alive():
+                print(f"⚠️  Worker {i} still running after timeout")
+        
+        # Clear queues to prevent deadlock
+        for q in self.queues:
+            try:
+                while not q.empty():
+                    q.get_nowait()
+            except Exception:
+                pass
         
         # Final stats
         stats = self.metrics.get_stats()
@@ -697,7 +712,18 @@ class BenchmarkPipeline:
         print(f"  GPU memory:      {stats['mem_util']:.0f}%")
         print(f"{'='*60}\n")
         
+        # Cleanup GPU resources before shutting down metrics
+        try:
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+        
+        # Shutdown metrics last
         self.metrics.shutdown()
+        
+        # Small delay before exit to ensure cleanup
+        time.sleep(0.5)
 
 
 # ============================================================================
