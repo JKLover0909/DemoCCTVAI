@@ -1,0 +1,30 @@
+# =============================================================================
+# deepstream/config/dstest_source.txt
+#
+# RTSP source configuration for nvstreammux.
+# Referenced by deepstream_benchmark.py pipeline builder.
+# =============================================================================
+
+[source0]
+enable=1
+# Camera RTSP H264 stream — TCP transport for reliability
+type=4
+uri=rtsp://root:Mkvc%402025@192.168.40.40:554/media/stream.sdp?profile=Profile101
+num-sources=1
+# Drop frames if pipeline cannot keep up (live source behaviour)
+drop-on-latency=1
+
+[streammux]
+# Mux all sources to a single batch
+batch-size=1
+# Target pipeline FPS — set ≥ camera FPS to avoid artificial drop
+live-source=1
+# Output resolution (must match nvinfer input)
+width=1280
+height=960
+enable-padding=0
+# Attach NTP-based timestamps so buf_pts reflects wall time
+attach-sys-ts-as-ntp=1
+# Perf measurement hook — prints "Perf:" line every N seconds via pipeline bus
+enable-perf-measurement=1
+perf-measurement-interval-sec=2

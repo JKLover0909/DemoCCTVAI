@@ -28,3 +28,4 @@ matplotlib
 pandas
 requests
 pynvml
+flask
